@@ -7,9 +7,11 @@
 Execute 3 times and take the average
 
 + Basic: Interpreter with no optimization
-+ Optimize: Interpreter optimized with add, move, and pre-compute jumps
++ Optimize1: Interpreter optimized with add, move, and pre-compute jumps
++ Optimize2: Interpreter optimized some loop pattern with specific instruction like: Clear, AddTo, MoveUntil
 
-| Version  | factor.bf | mandelbrot.bf |
-|----------|-----------|---------------|
-| Basic    | 10.66s    | 32.42s        |
-| Optimize | 2.89s     | 6.34s         |
+| Version   | factor.bf | mandelbrot.bf |
+|-----------|-----------|---------------|
+| Basic     | 10.66s    | 32.42s        |
+| Optimize1 | 2.89s     | 6.34s         |
+| Optimize2 | 1.79s     | 4.83s         |
