@@ -1,187 +1,174 @@
-use std::io::{stdout, Read, Write};
+use std::io::Write;
 
 const MAX_MEM_ARRAY_SIZE: usize = 30000;
-
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-enum Instruction {
-    Move(isize),      // > or <
-    Add(u8),          // + or -
-    OutputValue,      // .
-    InputValue,       // ,
-    LoopStart(usize), // [
-    LoopEnd(usize),   // ]
-    // Clear current value, pattern: [Add(n)], n is odd
-    Clear,
-    // Add current value to the value in relative pos n, save the result to n, and clear current value
-    // pattern: [Add(-1) Move(n) Add(1) Move(-n)]
-    AddTo(isize),
-    // Move until 0, pattern: [Move(n)]
-    MoveUntil(isize),
-}
 
 pub struct UnbalancedBrackets(pub char, pub usize);
 
 pub struct Program {
-    instructions: Vec<Instruction>,
+    code: Vec<u8>,
     memory: [u8; MAX_MEM_ARRAY_SIZE],
-    mem_ptr: usize,
-    inst_ptr: usize,
 }
 
 impl Program {
-    pub fn new(code: &[u8]) -> Result<Program, UnbalancedBrackets> {
-        let mut instructions = Vec::new();
-        let mut bracket_stack = Vec::new();
+    pub fn new(source: &[u8]) -> Result<Program, UnbalancedBrackets> {
+        // Prolouge
+        let mut code: Vec<u8> = vec![
+            0xff, 0x43, 0x00, 0xd1, // sub	sp, sp, #16
+            0xfd, 0x7b, 0x00, 0xa9, // stp	x29, x30, [sp]
+            0xe8, 0x03, 0x00, 0xaa, // mov x8, x0 ; x8: self.memory
+            0x09, 0x00, 0x80, 0xd2, // mov x9, #0 ; x9: current memory pointer
+        ];
+        let memory = [0u8; MAX_MEM_ARRAY_SIZE];
+        let mut bracket_stack: Vec<usize> = Vec::new();
 
-        for &c in code {
-            let instruction = match c {
-                b'>' | b'<' => {
-                    let offset = if c == b'>' { 1 } else { -1 };
-                    if let Some(Instruction::Move(last_offset)) = instructions.last_mut() {
-                        *last_offset += offset;
-                        continue;
-                    }
-                    Instruction::Move(offset)
-                }
-                b'+' | b'-' => {
-                    let inc = if c == b'+' { 1 } else { 1u8.wrapping_neg() };
-                    if let Some(Instruction::Add(last_inc)) = instructions.last_mut() {
-                        *last_inc = last_inc.wrapping_add(inc);
-                        continue;
-                    }
-                    Instruction::Add(inc)
-                }
-                b'.' => Instruction::OutputValue,
-                b',' => Instruction::InputValue,
+        for c in source {
+            match c {
+                b'+' => code
+                    .write_all(&[
+                        0x0b, 0x01, 0x09, 0x8b, // add	x11, x8, x9
+                        0x6a, 0x01, 0x40, 0x39, // ldrb	w10, [x11]
+                        0x4a, 0x05, 0x00, 0x11, // add	w10, w10, #1
+                        0x6a, 0x01, 0x00, 0x39, // strb	w10, [x11]
+                    ])
+                    .unwrap(),
+                b'-' => code
+                    .write_all(&[
+                        0x0b, 0x01, 0x09, 0x8b, // add	x11, x8, x9
+                        0x6a, 0x01, 0x40, 0x39, // ldrb	w10, [x11]
+                        0x4a, 0x05, 0x00, 0x51, // sub	w10, w10, #1
+                        0x6a, 0x01, 0x00, 0x39, // strb	w10, [x11]
+                    ])
+                    .unwrap(),
+                b'>' => code
+                    .write_all(&[
+                        0x2a, 0x05, 0x00, 0x91, // add	x10, x9, #1
+                        0x0b, 0xa6, 0x8e, 0x52, // mov	w11, #30000
+                        0x5f, 0x01, 0x0b, 0xeb, // cmp	x10, x11
+                        0xe9, 0x03, 0x8a, 0x9a, // csel	x9, xzr, x10, eq
+                    ])
+                    .unwrap(),
+                b'<' => code
+                    .write_all(&[
+                        0x2a, 0x05, 0x00, 0xd1, // sub	x10, x9, #1
+                        0xeb, 0xa5, 0x8e, 0x52, // mov	w11, #29999
+                        0x3f, 0x01, 0x09, 0xea, // tst	x9,  x9
+                        0x69, 0x01, 0x8a, 0x9a, // csel	x9,  x11, x10, eq
+                    ])
+                    .unwrap(),
+                b'.' => code
+                    .write_all(&[
+                        0x00, 0x00, 0x80, 0x52, // mov	w0,  #0 ; fd: stdout
+                        0x01, 0x01, 0x09, 0x8b, // add  x1,  x8, x9
+                        0x22, 0x00, 0x80, 0xd2, // mov	x2,  #1 ; output len, only 1 number
+                        0x90, 0x00, 0x80, 0x52, // mov	w16, #4 ; write system call number
+                        0x01, 0x10, 0x00, 0xd4, // svc	#0x80    ;  syscall
+                    ])
+                    .unwrap(),
+                b',' => code
+                    .write_all(&[
+                        0x20, 0x00, 0x80, 0x52, // mov w0,  #1 ; fd: stdin
+                        0x01, 0x01, 0x09, 0x8b, // add x1,  x8, x9
+                        0x22, 0x00, 0x80, 0xd2, // mov x2,  #1 ; input len, only 1 number
+                        0x70, 0x00, 0x80, 0x52, // mov w16, #3 ; read system call number
+                        0x01, 0x10, 0x00, 0xd4, // svc #0x80
+                    ])
+                    .unwrap(),
                 b'[' => {
-                    bracket_stack.push(instructions.len());
-                    Instruction::LoopStart(0)
+                    bracket_stack.push(code.len());
+                    code.write_all(&[
+                        0x0a, 0x69, 0x69, 0x38, // ldrb	 w10, [x8, x9]
+                        0x5f, 0x01, 0x0a, 0x6a, // tst	 w10, xzr
+                        0x00, 0x00, 0x00, 0x54, // b.eq	 0x00  ; Change the offset later
+                    ])
+                    .unwrap();
                 }
                 b']' => {
-                    let ix_len = instructions.len();
-                    match bracket_stack.pop() {
-                        Some(start) => Self::parse_loop(&mut instructions, start),
-                        None => return Err(UnbalancedBrackets(']', ix_len)),
+                    let start = bracket_stack.pop();
+                    if start.is_none() {
+                        return Err(UnbalancedBrackets(']', code.len()));
                     }
+
+                    let start = start.unwrap();
+                    let end = code.len();
+                    code.write_all(&[
+                        0x0a, 0x69, 0x69, 0x38, // ldrb	 w10, [x8, x9]
+                        0x5f, 0x01, 0x0a, 0x6a, // tst	 w10, w10
+                    ])
+                    .unwrap();
+
+                    // Append instruction b.ne	<start>
+                    let offset = ((((start - end + 4) as i32) >> 2) as u32) & 0x7ffff;
+                    let branch_ix = 0x54 << 24 | offset << 5 | 0x1;
+                    code.write_all(&branch_ix.to_le_bytes()).unwrap();
+
+                    // Change branch position of b.eq <end>
+                    let offset = (((end - start + 4) as u32) >> 2) & 0x7ffff;
+                    let branch_ix = 0x54 << 24 | offset << 5;
+                    code[start + 8..start + 12].copy_from_slice(&branch_ix.to_le_bytes());
                 }
                 _ => continue,
             };
-            instructions.push(instruction);
         }
 
-        if let Some(start) = bracket_stack.pop() {
-            return Err(UnbalancedBrackets('[', start));
+        if !bracket_stack.is_empty() {
+            return Err(UnbalancedBrackets('[', bracket_stack.pop().unwrap()));
         }
 
-        Ok(Program {
-            instructions,
-            memory: [0; MAX_MEM_ARRAY_SIZE],
-            mem_ptr: 0,
-            inst_ptr: 0,
-        })
+        // Epilouge
+        code.write_all(&[
+            0xfd, 0x7b, 0x40, 0xa9, // ldp	x29, x30, [sp]
+            0xff, 0x43, 0x00, 0x91, // add	sp,  sp,  #16
+            0xc0, 0x03, 0x5f, 0xd6, // ret
+        ])
+        .unwrap();
+
+        // code.chunks(4).for_each(|chunk| {
+        //     println!(
+        //         "{:08x} ",
+        //         u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+        //     );
+        // });
+
+        Ok(Program { code, memory })
     }
 
-    /// Optimize loop
-    fn parse_loop(instructions: &mut Vec<Instruction>, start: usize) -> Instruction {
-        let ix_len = instructions.len();
-        instructions[start] = Instruction::LoopStart(ix_len);
-        match instructions.as_slice() {
-            // Parse Clear
-            &[.., Instruction::LoopStart(_), Instruction::Add(n)] if n % 2 == 1 => {
-                instructions.drain(ix_len - 2..);
-                Instruction::Clear
-            }
-            // Parse AddTo
-            &[.., Instruction::LoopStart(_), Instruction::Add(255), Instruction::Move(n), Instruction::Add(1), Instruction::Move(m)]
-                if n == -m =>
-            {
-                instructions.drain(ix_len - 5..);
-                Instruction::AddTo(n)
-            }
-            // parse MoveUntil
-            &[.., Instruction::LoopStart(_), Instruction::Move(n)] => {
-                instructions.drain(ix_len - 2..);
-                Instruction::MoveUntil(n)
-            }
-            _ => Instruction::LoopEnd(start),
-        }
-    }
-
+    #[inline(never)]
     pub fn run(&mut self) -> std::io::Result<()> {
-        let mut stdout = stdout().lock();
-        let mut stdin = std::io::stdin().lock();
-        'program: loop {
-            let instruction = self.instructions[self.inst_ptr];
-            match instruction {
-                Instruction::Move(n) => {
-                    self.mem_ptr = self.get_pos(n);
-                }
-                Instruction::Add(n) => {
-                    self.set_cur_value(self.cur_value().wrapping_add(n));
-                }
-                Instruction::OutputValue => {
-                    stdout.write_all(&[self.cur_value()])?;
-                    stdout.flush()?;
-                }
-                Instruction::InputValue => loop {
-                    let read_res =
-                        stdin.read_exact(&mut self.memory[self.mem_ptr..self.mem_ptr + 1]);
-                    match read_res.as_ref().map_err(|e| e.kind()) {
-                        Err(std::io::ErrorKind::UnexpectedEof) => {
-                            self.set_cur_value(0);
-                        }
-                        _ => read_res?,
-                    }
-                    if self.cur_value() == b'\r' {
-                        continue;
-                    }
-                    break;
-                },
-                Instruction::LoopStart(end) => {
-                    if self.cur_value() == 0 {
-                        self.inst_ptr = end;
-                    }
-                }
-                Instruction::LoopEnd(start) => {
-                    if self.cur_value() != 0 {
-                        self.inst_ptr = start;
-                    }
-                }
-                Instruction::Clear => self.set_cur_value(0),
-                Instruction::AddTo(n) => {
-                    let to = self.get_pos(n);
-                    self.memory[to] = self.cur_value().wrapping_add(self.memory[to]);
-                    self.set_cur_value(0);
-                }
-                Instruction::MoveUntil(n) => loop {
-                    if self.cur_value() == 0 {
-                        break;
-                    }
-                    self.mem_ptr = self.get_pos(n);
-                },
+        unsafe {
+            let code_mem = libc::mmap(
+                std::ptr::null_mut(),
+                self.code.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            if code_mem == libc::MAP_FAILED {
+                panic!("mmap failed. {:?}", get_os_err());
             }
-            self.inst_ptr += 1;
-            if self.inst_ptr == self.instructions.len() {
-                break 'program;
+
+            std::slice::from_raw_parts_mut(code_mem as *mut u8, self.code.len())
+                .copy_from_slice(&self.code);
+
+            let res = libc::mprotect(code_mem, self.code.len(), libc::PROT_READ | libc::PROT_EXEC);
+            if res == -1 {
+                panic!("mprotect failed. {}", get_os_err());
+            }
+
+            let _run: extern "Rust" fn(*mut u8) = std::mem::transmute(code_mem);
+
+            _run(self.memory.as_mut_ptr());
+
+            let res = libc::munmap(code_mem, self.code.len());
+            if res == -1 {
+                panic!("munmap failed. {}", get_os_err());
             }
         }
 
         Ok(())
     }
+}
 
-    #[inline]
-    fn cur_value(&self) -> u8 {
-        self.memory[self.mem_ptr]
-    }
-
-    #[inline]
-    fn set_cur_value(&mut self, value: u8) {
-        self.memory[self.mem_ptr] = value;
-    }
-
-    /// Get the `offset` position related to the current memory pointer
-    #[inline]
-    fn get_pos(&self, offset: isize) -> usize {
-        (self.mem_ptr as isize + offset + MAX_MEM_ARRAY_SIZE as isize) as usize % MAX_MEM_ARRAY_SIZE
-    }
+fn get_os_err() -> std::io::Error {
+    unsafe { std::io::Error::from_raw_os_error(*libc::__error()) }
 }
