@@ -10,6 +10,6 @@ echo "Building bf-compiler"
 cargo build --release
 
 # Calculate the time taken to run the factor.bf program
-echo 179424691 | run_program "factor.bf"
+echo "179424691" | run_program "factor.bf"
 # Calculate the time taken to run the mandelbrot.bf program
 run_program "mandelbrot.bf"
